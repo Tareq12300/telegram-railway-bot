@@ -1,4 +1,3 @@
-cat > alert_bot.py << 'ENDOFFILE'
 import os
 import asyncio
 import threading
@@ -47,4 +46,3 @@ async def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     asyncio.run(run_bot())
-ENDOFFILE
