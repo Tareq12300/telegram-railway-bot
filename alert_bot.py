@@ -1,14 +1,12 @@
 import os
 import re
 import asyncio
-import threading
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask
 
-# ==============================
+# =============================
 # 🔹 ENV VARIABLES
-# ==============================
+# =============================
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -17,22 +15,13 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 SOURCE_CHAT = os.environ["SOURCE_CHAT"].lstrip("@")
 DEST_CHAT = int(os.environ["DEST_CHAT"])
 
+KEYWORD = os.environ.get("KEYWORD", "")  # اختياري
 STRONG_THRESHOLD = int(os.environ.get("STRONG_THRESHOLD", 75))
 ELITE_THRESHOLD = int(os.environ.get("ELITE_THRESHOLD", 80))
 
-# ==============================
-# 🔹 FLASK APP (For gunicorn)
-# ==============================
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "alive", 200
-
-# ==============================
-# 🔹 UTILS
-# ==============================
+# =============================
+# 🔹 HELPERS
+# =============================
 
 def extract_number(pattern, text):
     match = re.search(pattern, text)
@@ -42,18 +31,20 @@ def extract_number(pattern, text):
 
 already_sent = set()
 
-# ==============================
-# 🔹 TELEGRAM BOT
-# ==============================
+# =============================
+# 🔹 BOT LOGIC
+# =============================
 
-async def run_bot():
-
+async def main():
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
     @client.on(events.NewMessage(chats=SOURCE_CHAT))
     async def handler(event):
-
         text = event.raw_text or ""
+
+        # 🔹 فلتر الكلمة (اختياري)
+        if KEYWORD and KEYWORD not in text:
+            return
 
         if event.id in already_sent:
             return
@@ -104,24 +95,12 @@ async def run_bot():
     await client.start()
     print("Telegram connected successfully")
     print(f"Bot running | Watching: {SOURCE_CHAT}")
-
     await client.run_until_disconnected()
 
-# ==============================
-# 🔹 BACKGROUND THREAD
-# ==============================
 
-def start_bot():
-    while True:
-        try:
-            asyncio.run(run_bot())
-        except Exception as e:
-            print("Bot crashed. Restarting in 10 seconds...")
-            print("Error:", e)
-            asyncio.sleep(10)
+# =============================
+# 🔹 START
+# =============================
 
-# ==============================
-# 🔹 START BOT THREAD
-# ==============================
-
-threading.Thread(target=start_bot, daemon=True).start()
+if __name__ == "__main__":
+    asyncio.run(main())
