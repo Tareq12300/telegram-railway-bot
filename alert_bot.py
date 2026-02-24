@@ -15,7 +15,7 @@ API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
 SOURCE_CHAT = os.environ["SOURCE_CHAT"].lstrip("@")
-DEST_CHAT = int(os.environ["DEST_CHAT"])
+DEST_CHAT = os.environ["DEST_CHAT"]  # نضعه لاحقاً بعد معرفة ID
 
 STRONG_THRESHOLD = int(os.environ.get("STRONG_THRESHOLD", 75))
 ELITE_THRESHOLD = int(os.environ.get("ELITE_THRESHOLD", 80))
@@ -44,7 +44,6 @@ def extract_number(pattern, text):
         return float(match.group(1).replace(",", ""))
     return None
 
-# منع التكرار
 already_sent = set()
 
 # ==============================
@@ -58,24 +57,23 @@ async def run_bot():
 
             @client.on(events.NewMessage(chats=SOURCE_CHAT))
             async def handler(event):
+
+                # 🔥 هذا السطر مهم — سيطبع رقم القناة في Logs
+                print("THIS CHAT ID IS:", event.chat_id)
+
                 text = event.raw_text or ""
 
                 if event.id in already_sent:
                     return
 
                 mc = extract_number(r'MC:\s*\$([\d,]+)', text)
-                liq = extract_number(r'Liq:\s*\$([\d,]+)', text) or extract_number(r'vLiq:\s*\$([\d,]+)', text)
+                vol = extract_number(r'Vol:\s*\$([\d,]+)', text)
+                holders = extract_number(r'Hodls?:\s*(\d+)', text)
                 fake = extract_number(r'Fake:.*?\[(\d+)', text)
                 bundles = extract_number(r'Bundles:.*?•\s*(\d+)', text)
-                snipers = extract_number(r'Snipers:.*?•\s*(\d+)', text)
                 dev = extract_number(r'Dev:.*?\|\s*(\d+)', text)
-                holders = extract_number(r'Hodls?:\s*(\d+)', text)
-                vol = extract_number(r'Vol:\s*\$([\d,]+)', text)
-                first20 = extract_number(r'First 20:\s*(\d+)', text)
 
                 score = 0
-
-                # ===== Smart Momentum Model =====
 
                 if mc and 70000 <= mc <= 130000:
                     score += 20
@@ -94,8 +92,6 @@ async def run_bot():
 
                 if dev is not None and dev == 0:
                     score += 10
-
-                # ================================
 
                 if score >= ELITE_THRESHOLD:
                     label = "🔥 ELITE SETUP"
