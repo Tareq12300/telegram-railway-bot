@@ -9,12 +9,15 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 
 TARGET_CHAT = os.environ["TARGET_CHAT"]
 SEND_TO = os.environ["SEND_TO"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+
 VOLUME_LIMIT = int(os.environ.get("VOLUME_LIMIT", "130000"))
 
 if TARGET_CHAT.lstrip("-").isdigit():
     TARGET_CHAT = int(TARGET_CHAT)
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+telethon_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+bot_client = TelegramClient("bot_sender_session", API_ID, API_HASH)
 
 
 def parse_money(x):
@@ -66,7 +69,7 @@ def get_symbol(text):
     return "UNKNOWN"
 
 
-@client.on(events.NewMessage(chats=TARGET_CHAT))
+@telethon_client.on(events.NewMessage(chats=TARGET_CHAT))
 async def handler(event):
     text = event.raw_text or ""
 
@@ -85,16 +88,20 @@ Volume 1h: ${volume:,.0f}
 """
 
     try:
-        entity = await client.get_entity(int(SEND_TO))
+        target = int(SEND_TO) if SEND_TO.lstrip("-").isdigit() else SEND_TO
 
         if event.media:
-            await client.send_file(
-                entity,
-                event.media,
-                caption=msg
-            )
+            media_file = await event.download_media(file=bytes)
+            if media_file:
+                await bot_client.send_file(
+                    target,
+                    media_file,
+                    caption=msg
+                )
+            else:
+                await bot_client.send_message(target, msg)
         else:
-            await client.send_message(entity, msg)
+            await bot_client.send_message(target, msg)
 
         print("ALERT:", symbol, volume)
 
@@ -103,12 +110,15 @@ Volume 1h: ${volume:,.0f}
 
 
 async def main():
-    me = await client.get_me()
+    await bot_client.start(bot_token=BOT_TOKEN)
+
+    me = await telethon_client.get_me()
     print("Logged in as:", me.first_name)
     print("Listening to:", TARGET_CHAT)
     print("Volume filter:", VOLUME_LIMIT)
+    print("Bot sender started")
 
 
-with client:
-    client.loop.run_until_complete(main())
-    client.run_until_disconnected()
+with telethon_client:
+    telethon_client.loop.run_until_complete(main())
+    telethon_client.run_until_disconnected()
