@@ -9,8 +9,10 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 
 TARGET_CHAT = os.environ["TARGET_CHAT"]
 SEND_TO = os.environ["SEND_TO"]
-
 VOLUME_LIMIT = int(os.environ.get("VOLUME_LIMIT", "130000"))
+
+if TARGET_CHAT.lstrip("-").isdigit():
+    TARGET_CHAT = int(TARGET_CHAT)
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -25,6 +27,9 @@ def parse_money(x):
     elif x.endswith("M"):
         mult = 1000000
         x = x[:-1]
+    elif x.endswith("B"):
+        mult = 1000000000
+        x = x[:-1]
 
     try:
         return float(x) * mult
@@ -33,17 +38,36 @@ def parse_money(x):
 
 
 def parse_volume(text):
-    m = re.search(r"Vol:\s*\$?([0-9\.,]+[KMB]?)", text)
-    if not m:
-        return None
-    return parse_money(m.group(1))
+    patterns = [
+        r"Vol:\s*\$?([0-9\.,]+[KMB]?)\s*\[1h\]",
+        r"Volume:\s*\$?([0-9\.,]+[KMB]?)",
+        r"Vol:\s*\$?([0-9\.,]+[KMB]?)"
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return parse_money(m.group(1))
+
+    return None
 
 
 def get_symbol(text):
-    m = re.search(r"\$([A-Z0-9]{2,15})", text)
-    if m:
-        return m.group(1)
+    patterns = [
+        r"\$([A-Z0-9]{2,15})",
+        r"\b([A-Z0-9]{2,15})\s+is\s+up"
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+
     return "UNKNOWN"
+
+
+def has_media(event):
+    return bool(event.photo or event.video or event.gif or event.sticker or event.document)
 
 
 @client.on(events.NewMessage(chats=TARGET_CHAT))
@@ -67,9 +91,17 @@ Volume 1h: ${volume:,.0f}
     try:
         entity = await client.get_entity(int(SEND_TO))
 
-        if event.photo:
-            file_bytes = await event.download_media(file=bytes)
-            await client.send_file(entity, file_bytes, caption=msg)
+        if has_media(event):
+            media_file = await event.download_media(file=bytes)
+            if media_file:
+                await client.send_file(
+                    entity,
+                    media_file,
+                    caption=msg,
+                    force_document=False
+                )
+            else:
+                await client.send_message(entity, msg)
         else:
             await client.send_message(entity, msg)
 
