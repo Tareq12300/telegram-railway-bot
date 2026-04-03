@@ -19,11 +19,9 @@ def parse_money(x):
     x = x.replace(",", "").replace("$", "").strip().upper()
 
     mult = 1
-
     if x.endswith("K"):
         mult = 1000
         x = x[:-1]
-
     elif x.endswith("M"):
         mult = 1000000
         x = x[:-1]
@@ -35,39 +33,30 @@ def parse_money(x):
 
 
 def parse_volume(text):
-
     m = re.search(r"Vol:\s*\$?([0-9\.,]+[KMB]?)", text)
-
     if not m:
         return None
-
     return parse_money(m.group(1))
 
 
 def get_symbol(text):
-
     m = re.search(r"\$([A-Z0-9]{2,15})", text)
-
     if m:
         return m.group(1)
-
     return "UNKNOWN"
 
 
 @client.on(events.NewMessage(chats=TARGET_CHAT))
 async def handler(event):
-
-    text = event.raw_text
+    text = event.raw_text or ""
 
     volume = parse_volume(text)
-
     if not volume or volume < VOLUME_LIMIT:
         return
 
     symbol = get_symbol(text)
 
-    msg = f"""
-🚨 Whale Alert
+    msg = f"""🚨 Whale Alert
 
 Token: {symbol}
 Volume 1h: ${volume:,.0f}
@@ -77,7 +66,13 @@ Volume 1h: ${volume:,.0f}
 
     try:
         entity = await client.get_entity(int(SEND_TO))
-        await client.send_message(entity, msg)
+
+        if event.photo:
+            file_bytes = await event.download_media(file=bytes)
+            await client.send_file(entity, file_bytes, caption=msg)
+        else:
+            await client.send_message(entity, msg)
+
         print("ALERT:", symbol, volume)
 
     except Exception as e:
@@ -85,9 +80,7 @@ Volume 1h: ${volume:,.0f}
 
 
 async def main():
-
     me = await client.get_me()
-
     print("Logged in as:", me.first_name)
     print("Listening to:", TARGET_CHAT)
     print("Volume filter:", VOLUME_LIMIT)
