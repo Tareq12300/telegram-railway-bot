@@ -2,6 +2,7 @@ import os
 import re
 import io
 import mimetypes
+from datetime import datetime, timedelta
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -14,12 +15,16 @@ SEND_TO = os.environ["SEND_TO"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 VOLUME_LIMIT = int(os.environ.get("VOLUME_LIMIT", "130000"))
+TRACK_HOURS = int(os.environ.get("TRACK_HOURS", "24"))
 
 if TARGET_CHAT.lstrip("-").isdigit():
     TARGET_CHAT = int(TARGET_CHAT)
 
 telethon_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 bot_client = TelegramClient("bot_sender_session", API_ID, API_HASH)
+
+# نخزن العملات التي تم إرسال تنبيه دخول لها
+alerted_tokens = {}
 
 
 def parse_money(x):
@@ -59,8 +64,8 @@ def parse_volume(text):
 
 def get_symbol(text):
     patterns = [
-        r"\$([A-Z0-9]{2,15})",
-        r"\b([A-Z0-9]{2,15})\s+is\s+up"
+        r"\$([A-Z0-9]{2,20})\b",
+        r"\b([A-Z0-9]{2,20})\s+is\s+up\b"
     ]
 
     for pattern in patterns:
@@ -68,7 +73,54 @@ def get_symbol(text):
         if m:
             return m.group(1).upper()
 
-    return "UNKNOWN"
+    return None
+
+
+def parse_up_signal(text):
+    """
+    أمثلة:
+    YURI is up 54%
+    YURI is up 2.1X
+    """
+    m = re.search(r"\b([A-Z0-9]{2,20})\s+is\s+up\s+([0-9\.]+)\s*(%|X)\b", text, re.IGNORECASE)
+    if not m:
+        return None
+
+    symbol = m.group(1).upper()
+    value = m.group(2)
+    unit = m.group(3).upper()
+
+    return {
+        "symbol": symbol,
+        "value": value,
+        "unit": unit
+    }
+
+
+def parse_mc_range(text):
+    """
+    يقرأ:
+    $103K —> $159K
+    """
+    m = re.search(r"\$([0-9\.,]+[KMB]?)\s*[—\-–>]+\s*\$([0-9\.,]+[KMB]?)", text)
+    if not m:
+        return None
+
+    start_mc = m.group(1)
+    end_mc = m.group(2)
+    return start_mc, end_mc
+
+
+def cleanup_old_tokens():
+    now = datetime.utcnow()
+    expired = []
+
+    for symbol, dt in alerted_tokens.items():
+        if now - dt > timedelta(hours=TRACK_HOURS):
+            expired.append(symbol)
+
+    for symbol in expired:
+        del alerted_tokens[symbol]
 
 
 def get_document_filename(document):
@@ -89,7 +141,6 @@ def build_upload_file(file_bytes, filename):
 
 
 async def resend_media(event, target, caption):
-    # صورة تيليجرام العادية
     if event.photo:
         file_bytes = await event.download_media(file=bytes)
         if not file_bytes:
@@ -105,7 +156,6 @@ async def resend_media(event, target, caption):
         )
         return
 
-    # ملفات أو صور مرفوعة كـ document
     if event.document:
         document = event.document
         mime_type = getattr(document, "mime_type", "") or ""
@@ -116,7 +166,6 @@ async def resend_media(event, target, caption):
             await bot_client.send_message(target, caption)
             return
 
-        # إذا كان الملف صورة، نعيد رفعه كصورة وليس Download
         if mime_type.startswith("image/"):
             ext = mimetypes.guess_extension(mime_type) or ".jpg"
             image_name = filename or f"image{ext}"
@@ -130,7 +179,6 @@ async def resend_media(event, target, caption):
             )
             return
 
-        # إذا كان فيديو
         if mime_type.startswith("video/"):
             ext = mimetypes.guess_extension(mime_type) or ".mp4"
             video_name = filename or f"video{ext}"
@@ -145,7 +193,6 @@ async def resend_media(event, target, caption):
             )
             return
 
-        # أي ملف آخر
         generic_name = filename or "media.bin"
         generic_file = build_upload_file(file_bytes, generic_name)
 
@@ -157,21 +204,23 @@ async def resend_media(event, target, caption):
         )
         return
 
-    # لو ما فيه ميديا
     await bot_client.send_message(target, caption)
 
 
 @telethon_client.on(events.NewMessage(chats=TARGET_CHAT))
 async def handler(event):
+    cleanup_old_tokens()
+
     text = event.raw_text or ""
+    target = int(SEND_TO) if SEND_TO.lstrip("-").isdigit() else SEND_TO
 
-    volume = parse_volume(text)
-    if not volume or volume < VOLUME_LIMIT:
-        return
+    try:
+        # 1) تنبيه الدخول الأساسي
+        volume = parse_volume(text)
+        symbol = get_symbol(text)
 
-    symbol = get_symbol(text)
-
-    msg = f"""🚨 Whale Alert
+        if volume and volume >= VOLUME_LIMIT and symbol:
+            msg = f"""🚨 Whale Alert
 
 Token: {symbol}
 Volume 1h: ${volume:,.0f}
@@ -179,15 +228,41 @@ Volume 1h: ${volume:,.0f}
 {text}
 """
 
-    try:
-        target = int(SEND_TO) if SEND_TO.lstrip("-").isdigit() else SEND_TO
+            if event.media:
+                await resend_media(event, target, msg)
+            else:
+                await bot_client.send_message(target, msg)
 
-        if event.media:
-            await resend_media(event, target, msg)
-        else:
-            await bot_client.send_message(target, msg)
+            alerted_tokens[symbol] = datetime.utcnow()
+            print("ENTRY ALERT:", symbol, volume)
+            return
 
-        print("ALERT:", symbol, volume)
+        # 2) تنبيه الارتفاع لنفس العملة إذا كانت أرسلت سابقًا
+        up_data = parse_up_signal(text)
+        if up_data:
+            up_symbol = up_data["symbol"]
+
+            if up_symbol in alerted_tokens:
+                mc_range = parse_mc_range(text)
+
+                extra_line = ""
+                if mc_range:
+                    extra_line = f"\nMC: ${mc_range[0]} -> ${mc_range[1]}\n"
+
+                growth_msg = f"""📈 Follow-Up Alert
+
+Token: {up_symbol}
+Move: {up_data["value"]}{up_data["unit"]}{extra_line}
+{text}
+"""
+
+                if event.media:
+                    await resend_media(event, target, growth_msg)
+                else:
+                    await bot_client.send_message(target, growth_msg)
+
+                print("UP ALERT:", up_symbol, up_data["value"], up_data["unit"])
+                return
 
     except Exception as e:
         print("SEND ERROR:", e)
@@ -200,6 +275,7 @@ async def main():
     print("Logged in as:", me.first_name)
     print("Listening to:", TARGET_CHAT)
     print("Volume filter:", VOLUME_LIMIT)
+    print("Track hours:", TRACK_HOURS)
     print("Bot sender started")
 
 
