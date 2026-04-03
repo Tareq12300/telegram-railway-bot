@@ -1,6 +1,5 @@
 import os
 import re
-from datetime import datetime, timedelta
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -9,18 +8,14 @@ API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
 
 TARGET_CHAT = os.environ["TARGET_CHAT"]
-SEND_TO = os.environ.get("SEND_TO", "me")
+SEND_TO = os.environ["SEND_TO"]
+
 VOLUME_LIMIT = int(os.environ.get("VOLUME_LIMIT", "130000"))
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-last_alert_times = {}
 
 def parse_money(x):
-
-    if not x:
-        return None
-
     x = x.replace(",", "").replace("$", "").strip().upper()
 
     mult = 1
@@ -41,62 +36,52 @@ def parse_money(x):
 
 def parse_volume(text):
 
-    patterns = [
-        r"Vol:\s*\$?([0-9\.,]+[KMB]?)\s*\[1h\]",
-        r"Volume:\s*\$?([0-9\.,]+[KMB]?)",
-        r"Vol:\s*\$?([0-9\.,]+[KMB]?)"
-    ]
+    m = re.search(r"Vol:\s*\$?([0-9\.,]+[KMB]?)", text)
 
-    for p in patterns:
-        m = re.search(p, text, re.IGNORECASE)
+    if not m:
+        return None
 
-        if m:
-            return parse_money(m.group(1))
-
-    return None
+    return parse_money(m.group(1))
 
 
-def first_symbol(text):
+def get_symbol(text):
 
-    patterns = [
-        r"\$([A-Z0-9]{2,15})",
-        r"\b([A-Z0-9]{2,15})\s+is\s+up"
-    ]
+    m = re.search(r"\$([A-Z0-9]{2,15})", text)
 
-    for p in patterns:
+    if m:
+        return m.group(1)
 
-        m = re.search(p, text, re.IGNORECASE)
-
-        if m:
-            return m.group(1).upper()
-
-    return None
+    return "UNKNOWN"
 
 
 @client.on(events.NewMessage(chats=TARGET_CHAT))
 async def handler(event):
 
-    text = event.raw_text or ""
+    text = event.raw_text
 
     volume = parse_volume(text)
 
     if not volume or volume < VOLUME_LIMIT:
         return
 
-    symbol = first_symbol(text)
+    symbol = get_symbol(text)
 
     msg = f"""
 🚨 Whale Alert
 
-Token: {symbol or 'UNKNOWN'}
-Volume 1h: {volume:,.0f}
+Token: {symbol}
+Volume 1h: ${volume:,.0f}
 
 {text}
 """
 
-entity = await client.get_entity(int(SEND_TO))
-await client.send_message(entity, msg)
-    print("Alert:", symbol, volume)
+    try:
+        entity = await client.get_entity(int(SEND_TO))
+        await client.send_message(entity, msg)
+        print("ALERT:", symbol, volume)
+
+    except Exception as e:
+        print("SEND ERROR:", e)
 
 
 async def main():
