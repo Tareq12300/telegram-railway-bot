@@ -94,8 +94,8 @@ Volume 1h: {volume:,.0f}
 {text}
 """
 
-    await client.send_message(SEND_TO, msg)
-
+entity = await client.get_entity(int(SEND_TO))
+await client.send_message(entity, msg)
     print("Alert:", symbol, volume)
 
 
